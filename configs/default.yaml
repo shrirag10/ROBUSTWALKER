@@ -1,0 +1,58 @@
+# PPO Hyperparameters for Go1 Locomotion
+
+algorithm: PPO
+
+# Environment
+n_envs: 8
+episode_length: 1000  # 20 seconds at 50Hz
+
+# Training
+total_timesteps: 2_000_000  # ~2-3 hours training
+learning_rate: 3.0e-4
+n_steps: 2048  # Rollout buffer size per env
+batch_size: 64
+n_epochs: 10
+gamma: 0.99
+gae_lambda: 0.95
+clip_range: 0.2
+ent_coef: 0.01
+vf_coef: 0.5
+max_grad_norm: 0.5
+
+# Policy Network
+policy: MlpPolicy
+policy_kwargs:
+  net_arch:
+    pi: [256, 256]
+    vf: [256, 256]
+  activation_fn: elu
+
+# Control
+control_mode: position  # position, torque, delta
+control_freq: 50  # Hz
+
+# Domain Randomization
+domain_rand:
+  friction_range: [0.5, 1.2]
+  payload_range: [0.0, 4.0]  # kg
+  motor_strength_range: [0.9, 1.1]
+  push_force_range: [0.0, 15.0]  # N
+  push_interval: [5.0, 10.0]  # seconds between pushes
+
+# Terrain
+terrain:
+  max_slope: 15  # degrees
+  roughness: 0.05  # height variation in meters
+
+# Reward weights
+rewards:
+  velocity_tracking: 1.0
+  torque_penalty: 0.001
+  action_rate_penalty: 0.1
+  stumble_penalty: 2.0
+  termination_penalty: 5.0
+
+# Logging
+log_interval: 10
+save_freq: 100000
+eval_freq: 50000
