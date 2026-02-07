@@ -26,8 +26,8 @@ logs/
 *.log
 training*.log
 
-# Videos
-videos/
+# Videos (keep demo videos for README)
+# videos/
 
 # Misc
 .DS_Store
