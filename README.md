@@ -11,7 +11,7 @@
 
 ## 📖 Overview
 
-RobustWalker trains a **PPO-based neural network policy** to control the Unitree Go1 quadruped robot using **only proprioceptive sensing** (no cameras or LiDAR). The robot learns to walk robustly on rough terrain and recover from external disturbances through **domain randomization** during training.
+RobustWalker trains a **PPO-based RL policy** to control the Unitree Go1 quadruped robot using **only proprioceptive sensing** (no cameras or LiDAR). The robot learns to walk robustly on rough terrain and recover from external disturbances through **domain randomization** during training.
 
 ### 🎥 Training Demo
 
