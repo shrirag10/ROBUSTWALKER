@@ -389,6 +389,7 @@ class Go1Env(gym.Env):
             body_contacts=body_contacts,
             commands=self.commands,
             terminated=terminated,
+            base_height=self.data.qpos[2],  # Pass current base height
         )
     
     def _check_termination(self) -> bool:
@@ -400,11 +401,11 @@ class Go1Env(gym.Env):
         projected_gravity = get_projected_gravity(self.model, self.data)
         
         # Terminate if:
-        # 1. Base too low (fell)
-        # 2. Body tilted too much
-        if base_height < 0.15:
+        # 1. Base too low (fell) - RELAXED from 0.15 to 0.12
+        # 2. Body tilted too much - RELAXED from -0.5 to -0.2 (~78° tilt tolerance)
+        if base_height < 0.12:
             return True
-        if projected_gravity[2] > -0.5:  # Should be close to -1 when upright
+        if projected_gravity[2] > -0.2:  # Was -0.5 (60°), now -0.2 (~78°)
             return True
             
         return False

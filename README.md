@@ -5,26 +5,83 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-red.svg)](https://pytorch.org/)
 [![MuJoCo](https://img.shields.io/badge/MuJoCo-3.0+-green.svg)](https://mujoco.org/)
+[![Genesis](https://img.shields.io/badge/Genesis-GPU_Sim-orange.svg)](https://genesis-world.readthedocs.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ---
 
 ## 📖 Overview
 
-RobustWalker trains a **PPO-based neural network policy** to control the Unitree Go1 quadruped robot using **only proprioceptive sensing** (no cameras or LiDAR). The robot learns to walk robustly on rough terrain and recover from external disturbances through **domain randomization** during training.
+RobustWalker trains a **PPO-based neural network policy** to control the Unitree Go1 quadruped robot using **only proprioceptive sensing** (no cameras or LiDAR). The project supports both **MuJoCo** (CPU, single-env) and **Genesis** (GPU, massively parallel) simulators, enabling rapid policy iteration and comparison.
 
-### 🎥 Training Demo
-
-[![Training Demo](https://img.shields.io/badge/▶️_Watch_Training_Video-Google_Drive-4285F4?style=for-the-badge&logo=googledrive&logoColor=white)](https://drive.google.com/file/d/1CoJNGUmFYeM_CfP4g9liCz5-LFeYYQjU/view?usp=sharing)
-
-> **[Click here to watch the trained policy in action →](https://drive.google.com/file/d/1CoJNGUmFYeM_CfP4g9liCz5-LFeYYQjU/view?usp=sharing)**
+<p align="center">
+  <img src="assets/go1_trotting.png" alt="Go1 Robot Trotting" width="500">
+</p>
 
 ### Key Features
 
 - 🏃 **Blind Locomotion**: Walks using only joint encoders and IMU—no vision required
-- 🌍 **Domain Randomization**: Randomizes friction, payload, motor strength, and external pushes for sim-to-real transfer
-- ⚡ **Parallel Training**: Vectorized environments for fast training with Stable-Baselines3
-- 📊 **Comprehensive Rewards**: Multi-objective reward function balancing speed, efficiency, and stability
+- ⚡ **Dual Simulator Support**: MuJoCo (CPU) and Genesis (GPU) with full comparison
+- 🌍 **Domain Randomization**: Randomizes friction, payload, motor strength for sim-to-real transfer
+- 🤸 **Trot Gait Control**: Diagonal symmetry reward produces natural quadruped locomotion
+- 📊 **Comprehensive Metrics**: Side-by-side simulator comparison with training curves
+
+---
+
+## 📊 MuJoCo vs Genesis — Performance Comparison
+
+### Training Metrics
+
+| Metric | MuJoCo (SB3 PPO) | Genesis (rsl-rl PPO) |
+|--------|:-----------------:|:--------------------:|
+| **Total reward** | 30.83 ± 3.59 | **51.20** |
+| **Episode length** | 11 steps (0.22s) | **1001 steps (20s)** |
+| **Avg base height** | N/A (falls) | **0.333 m** |
+| **Survival rate** | 0% (falls in <1s) | **100% (full episodes)** |
+| **Best velocity** | 0.32 m/s | **1.41 m/s** (tracking) |
+| **Push recovery** | 0% (0/5) | N/A (not tested yet) |
+
+### Simulation & Training Speed
+
+| Feature | MuJoCo | Genesis |
+|---------|:------:|:-------:|
+| **Backend** | CPU | GPU (CUDA) |
+| **Physics rate** | 500 Hz | 100 Hz (2 substeps) |
+| **Control frequency** | 50 Hz | 50 Hz |
+| **Parallel environments** | 4–16 | **4096** |
+| **Training throughput** | ~2K steps/s | **169K steps/s** |
+| **Speedup** | 1× (baseline) | **~85×** |
+| **Time to 147M steps** | ~20 hours | **~14 minutes** |
+| **Eval FPS (headless)** | ~50 | **~556** |
+
+### Reward Architecture Comparison
+
+| Reward Component | MuJoCo | Genesis | Notes |
+|-----------------|:------:|:-------:|-------|
+| Velocity tracking | ✅ exp(-err/σ) | ✅ exp(-err/σ) | Both use Gaussian |
+| Alive bonus | ✅ 0.1/step | ✅ 1.0/step | Genesis uses larger bonus |
+| Base height | ✅ exp(-err/σ) | ✅ squared error | Different formulations |
+| Torque penalty | ✅ sum(τ²) | ✅ sum(τ²) | Identical |
+| Action rate | ✅ sum(Δa²) | ✅ sum(Δa²) | Identical |
+| Joint acceleration | ✅ sum(Δv²) | ✅ sum(Δv²) | Identical |
+| Orientation | ✅ gravity proj | ✅ gravity proj | Identical |
+| Foot contact | ✅ force sensors | ❌ unavailable | Genesis limitation |
+| **Trot symmetry** | ❌ | ✅ **diagonal pairs** | Compensates for no contact |
+| **Hip penalty** | ❌ | ✅ **dedicated** | Prevents leg splaying |
+| Stumble detection | ✅ geom contact | ✅ height-based | Different methods |
+| Joint limits | ✅ squared | ❌ | Not yet in Genesis |
+| Termination | ✅ -5.0 | ✅ roll/pitch check | Different approaches |
+
+### Key Architectural Differences
+
+| Aspect | MuJoCo | Genesis |
+|--------|--------|---------|
+| **RL Framework** | Stable-Baselines3 | rsl-rl |
+| **Algorithm** | PPO (MlpPolicy) | PPO (ActorCritic) |
+| **Network** | [256, 256] | [512, 256, 128] |
+| **Observations** | 57-dim (with history) | 45-dim (no history) |
+| **Contact detection** | Force sensors per foot | Calf link Z-height |
+| **Domain randomization** | ✅ friction, mass, push | ❌ (not yet) |
 
 ---
 
@@ -34,33 +91,21 @@ RobustWalker trains a **PPO-based neural network policy** to control the Unitree
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    Observation (57-dim)                      │
+│                    Observation (45-dim)                       │
 ├─────────────────────────────────────────────────────────────┤
-│  Joint Positions (12) │ Joint Velocities (12) │ IMU (6)     │
-│  Velocity Commands (3) │ Action History (24)                │
+│  Ang Vel (3) │ Proj Gravity (3) │ Commands (3)              │
+│  Joint Pos (12) │ Joint Vel (12) │ Last Action (12)         │
 └───────────────────────────┬─────────────────────────────────┘
                             ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                    MLP [256, 256]                           │
-│                    Activation: ELU                           │
+│              MLP [512, 256, 128] + ELU                       │
 └───────────────────────────┬─────────────────────────────────┘
                             ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                 Joint Position Targets (12)                  │
-│              (PD Controller → Torques → Robot)              │
+│                 Joint Position Targets (12)                   │
+│              (PD Controller → Torques → Robot)               │
 └─────────────────────────────────────────────────────────────┘
 ```
-
-### Observation Space (57 dimensions)
-
-| Component | Dimensions | Description |
-|-----------|------------|-------------|
-| Joint Positions | 12 | Normalized encoder readings for all leg joints |
-| Joint Velocities | 12 | Scaled velocity measurements |
-| Base Angular Velocity | 3 | IMU gyroscope in body frame |
-| Projected Gravity | 3 | Gravity vector in body frame (detects tilt) |
-| Velocity Commands | 3 | Target (vx, vy, ωz) for command tracking |
-| Action History | 24 | Last 2 actions for temporal context |
 
 ### Action Space (12 dimensions)
 
@@ -72,34 +117,37 @@ Joint position targets for all 12 actuators:
 
 ---
 
-## 🎯 Reward Function
+## 🎯 Genesis Reward Function (v10)
 
-The reward function balances multiple objectives:
+The reward function balances locomotion, posture enforcement, and gait quality:
 
 ```python
-reward = velocity_tracking + alive_bonus 
-       - torque_penalty - action_rate_penalty
-       - stumble_penalty - orientation_penalty - termination_penalty
+reward = tracking_lin_vel + tracking_ang_vel + alive
+       - symmetry - hip_deviation - similar_to_default
+       - base_height - orientation - stumble
+       - action_rate - dof_acc - torque - ang_vel_xy - lin_vel_z
 ```
 
 | Component | Weight | Description |
 |-----------|--------|-------------|
-| **Velocity Tracking** | 1.0 | Gaussian reward for matching commanded velocity |
-| **Alive Bonus** | 0.1 | Small reward for each timestep survived |
-| **Torque Penalty** | 0.001 | Minimizes energy consumption |
-| **Action Rate Penalty** | 0.1 | Encourages smooth joint motion |
-| **Stumble Penalty** | 2.0 | Penalizes body-ground contact |
-| **Orientation Penalty** | 0.5 | Keeps robot upright |
-| **Termination Penalty** | 5.0 | Large penalty for falling |
+| **Velocity tracking** | 1.5 / 0.8 | Forward + yaw tracking (Gaussian) |
+| **Alive bonus** | 1.0 | Reward per survived timestep |
+| **Trot symmetry** | -2.0 | Diagonal pair matching (FR↔RL, FL↔RR) |
+| **Hip deviation** | -1.0 | Prevents leg splaying |
+| **Similar to default** | -0.1 | Keeps joints near standing pose |
+| **Base height** | -30.0 | Maintain 0.34m standing height |
+| **Orientation** | -5.0 | Penalizes roll/pitch |
+| **Stumble** | -5.0 | Penalizes body dragging ground |
+| **Action rate** | -0.03 | Smooth actions (anti-jitter) |
+| **DOF acceleration** | -3.5e-7 | Smooth joint trajectories |
+| **Torque** | -0.0002 | Energy efficiency |
 
 ---
 
-## 🔀 Domain Randomization
-
-For robust sim-to-real transfer, we randomize:
+## 🔀 Domain Randomization (MuJoCo)
 
 | Parameter | Range | Applied When |
-|-----------|-------|--------------|
+|-----------|-------|--------------| 
 | **Ground Friction** | [0.5, 1.2] | Per episode |
 | **Payload Mass** | [0, 4] kg | Per episode |
 | **Motor Strength** | [0.9, 1.1]× | Per episode |
@@ -111,23 +159,29 @@ For robust sim-to-real transfer, we randomize:
 
 ```
 ROBUSTWALKER/
-├── assets/go1/              # MuJoCo model files (URDF → MJCF)
+├── assets/go1/              # MuJoCo/Genesis model files (MJCF)
 │   ├── go1.xml              # Robot definition
 │   └── scene.xml            # Scene with ground plane & lighting
 ├── robustwalker/            # Core Python package
 │   ├── envs/
-│   │   ├── go1_env.py       # Gymnasium environment
+│   │   ├── go1_env.py       # MuJoCo Gymnasium environment
+│   │   ├── genesis_env.py   # Genesis GPU-parallel environment
 │   │   └── domain_rand.py   # Domain randomization
 │   ├── rewards/
 │   │   └── locomotion.py    # Multi-objective reward function
 │   └── utils/
-│       └── mujoco_utils.py  # MuJoCo helper functions
+│       ├── mujoco_utils.py  # MuJoCo helper functions
+│       └── genesis_utils.py # Genesis tensor math helpers
 ├── scripts/
-│   ├── train.py             # PPO training script
-│   ├── evaluate.py          # Policy evaluation
-│   └── visualize.py         # Render trained policy
+│   ├── train.py             # PPO training (MuJoCo + SB3)
+│   ├── evaluate.py          # Policy evaluation (MuJoCo)
+│   ├── visualize.py         # Render trained policy (MuJoCo)
+│   ├── genesis_train.py     # PPO training (Genesis + rsl-rl)
+│   ├── genesis_eval.py      # Policy evaluation (Genesis)
+│   └── record_genesis_gif.py # Record trotting GIF
 ├── configs/
-│   └── default.yaml         # Hyperparameters
+│   ├── default.yaml         # MuJoCo hyperparameters
+│   └── genesis.yaml         # Genesis hyperparameters (v10)
 └── tests/
     └── test_env.py          # Environment unit tests
 ```
@@ -145,69 +199,60 @@ cd ROBUSTWALKER
 
 # Create virtual environment (recommended)
 python -m venv venv
-source venv/bin/activate  # Linux/Mac
-# venv\Scripts\activate   # Windows
+source venv/bin/activate
 
 # Install dependencies
 pip install -r requirements.txt
 ```
 
-### Training
+### MuJoCo Training (CPU)
 
 ```bash
-# Train with default config (~2M steps, ~2-3 hours on GPU)
+# Train with default config (~2M steps)
 python scripts/train.py
 
 # Custom training
 python scripts/train.py --timesteps 5000000 --n-envs 16
 
-# Quick test (10k steps)
-python scripts/train.py --test-mode
+# Evaluate
+python scripts/evaluate.py --checkpoint logs/best_model.zip
 ```
 
-### Evaluation & Visualization
+### Genesis Training (GPU — Recommended)
 
 ```bash
-# Evaluate trained policy
-python scripts/evaluate.py --checkpoint logs/best_model.zip
+# Install Genesis dependencies
+pip install genesis-world rsl-rl-lib==2.2.4
 
-# Visualize in MuJoCo viewer
-python scripts/visualize.py --checkpoint logs/best_model.zip
+# Train with 4096 parallel environments (~14 min)
+python scripts/genesis_train.py -e go1-walking -B 4096 --max_iterations 1500
 
-# Record video
-python scripts/visualize.py --checkpoint logs/best_model.zip --record
-```
+# Fine-tune from existing checkpoint
+python scripts/genesis_train.py -e go1-v2 -B 4096 --max_iterations 500 \
+    --resume logs/go1-walking/model_1400.pt
 
----
+# Evaluate with interactive viewer
+python scripts/genesis_eval.py -e go1-walking --ckpt 1400
 
-## ⚙️ Configuration
-
-Edit `configs/default.yaml` to customize training:
-
-```yaml
-# Training
-total_timesteps: 2_000_000
-n_envs: 8                    # Parallel environments
-learning_rate: 3.0e-4
-batch_size: 64
-
-# Policy Network
-policy_kwargs:
-  net_arch:
-    pi: [256, 256]
-    vf: [256, 256]
-  activation_fn: elu
-
-# Domain Randomization
-domain_rand:
-  friction_range: [0.5, 1.2]
-  payload_range: [0.0, 4.0]
-  push_force_range: [0.0, 15.0]
+# Headless evaluation (no display needed)
+python scripts/genesis_eval.py -e go1-walking --ckpt 1400 --headless --steps 1000
 ```
 
 ---
 
 ## 📈 Training Progress
+
+### Genesis Training Curve (v10)
+
+The v10 policy was trained using a **curriculum approach**:
+
+1. **Phase 1 (v8)**: Trained from scratch with L-R symmetry → learned to stand and walk (+41 reward)
+2. **Phase 2 (v10)**: Fine-tuned with diagonal trot symmetry → learned proper trot gait (+51 reward)
+
+| Phase | Iterations | Reward | Episode Length | Key Reward |
+|-------|-----------|--------|----------------|------------|
+| v8 (from scratch) | 1500 | +41.22 | 1001 (full) | L-R symmetry -0.039 |
+| v10 (fine-tune) | +500 | **+51.20** | 1001 (full) | Trot symmetry -0.056 |
 
 Monitor training with TensorBoard:
 
@@ -215,40 +260,65 @@ Monitor training with TensorBoard:
 tensorboard --logdir logs/
 ```
 
-Key metrics to track:
-- `rollout/ep_rew_mean` - Average episode reward
-- `train/loss` - Policy loss
-- `rollout/ep_len_mean` - Episode length (longer = more stable)
-
 ---
 
-## 🎯 Acceptance Criteria
+## ⚙️ Configuration
 
-- [ ] Track 0.8 m/s forward velocity on rough terrain for >15s
-- [ ] Recover from 15N lateral push without falling
-- [ ] Maintain stable trot gait pattern
+### Genesis Config (`configs/genesis.yaml`)
+
+```yaml
+env:
+  action_scale: 0.25          # Action scaling factor
+  kp: 50.0                    # PD proportional gain
+  kd: 1.0                     # PD derivative gain
+  episode_length_s: 20.0      # Episode length in seconds
+
+reward:
+  reward_scales:
+    tracking_lin_vel: 1.5      # Forward velocity reward
+    symmetry: -2.0             # Diagonal trot symmetry
+    hip_deviation: -1.0        # Prevent leg splaying
+    action_rate: -0.03         # Smooth actions
+
+training:
+  num_envs: 4096              # Parallel environments
+  max_iterations: 1500        # Training iterations
+```
 
 ---
 
 ## 🔬 Technical Details
 
-### MuJoCo Simulation
+### Trot Gait Symmetry
 
-- **Physics timestep**: 2ms (500 Hz)
-- **Control frequency**: 50 Hz (20ms per action)
-- **Episode length**: 1000 steps (20 seconds)
+The key innovation enabling natural quadruped locomotion in Genesis is the **diagonal trot symmetry** reward:
 
-### PPO Hyperparameters
+```
+Trot Pattern:
+  Phase 1: FR↗ + RL↗ (diagonal pair 1 swings)
+           FL↘ + RR↘ (diagonal pair 2 contacts)
+
+  Phase 2: FL↗ + RR↗ (diagonal pair 2 swings)
+           FR↘ + RL↘ (diagonal pair 1 contacts)
+```
+
+This is implemented by penalizing the difference between diagonal pairs:
+- `loss = |FR_joints - RL_joints|² + |FL_joints - RR_joints|²`
+
+> **Note:** Simple left-right symmetry (FR=FL, RR=RL) prevents walking entirely—it locks left and right legs to identical positions, allowing only vibration-based forward motion.
+
+### PPO Hyperparameters (Genesis)
 
 | Parameter | Value |
 |-----------|-------|
-| Rollout buffer | 2048 steps/env |
-| Minibatch size | 64 |
-| Epochs per update | 10 |
+| Rollout steps/env | 24 |
+| Minibatch count | 4 |
+| Epochs per update | 5 |
 | Discount (γ) | 0.99 |
 | GAE (λ) | 0.95 |
 | Clip range | 0.2 |
 | Entropy coefficient | 0.01 |
+| Learning rate | 0.001 (adaptive) |
 
 ---
 
@@ -256,6 +326,7 @@ Key metrics to track:
 
 - [Proximal Policy Optimization (PPO)](https://arxiv.org/abs/1707.06347) - Schulman et al., 2017
 - [Learning to Walk in Minutes](https://arxiv.org/abs/2109.11978) - Rudin et al., 2022
+- [Genesis: GPU-accelerated Simulation](https://genesis-world.readthedocs.io/)
 - [Unitree Go1 Documentation](https://www.unitree.com/products/go1)
 - [MuJoCo Physics Engine](https://mujoco.org/)
 

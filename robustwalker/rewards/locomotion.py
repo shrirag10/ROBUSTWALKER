@@ -11,21 +11,26 @@ class RewardConfig:
     """Configuration for reward function weights."""
     
     # Positive rewards
-    velocity_tracking: float = 1.0
-    alive_bonus: float = 0.1
+    velocity_tracking: float = 2.0  # Increased to encourage movement
+    alive_bonus: float = 1.5  # Give bonus for surviving
+    base_height_tracking: float = 1.0  # Reward for maintaining standing height
+    
+    # Target base height for standing (conservative target)
+    target_base_height: float = 0.22  # Lowered from 0.28 to be more achievable
+    height_tracking_sigma: float = 0.1  # Widened from 0.05 for more tolerance
     
     # Penalties (negative coefficients)
-    torque_penalty: float = 0.001
-    action_rate_penalty: float = 0.1
-    joint_acc_penalty: float = 0.0001
-    stumble_penalty: float = 2.0
-    termination_penalty: float = 5.0
-    orientation_penalty: float = 0.5
-    joint_limit_penalty: float = 1.0
+    torque_penalty: float = 0.0001
+    action_rate_penalty: float = 0.01
+    joint_acc_penalty: float = 0.00001
+    stumble_penalty: float = 1.0
+    termination_penalty: float = 10.0
+    orientation_penalty: float = 0.2
+    joint_limit_penalty: float = 0.5
     
     # Velocity tracking parameters
-    target_velocity: tuple[float, float, float] = (0.8, 0.0, 0.0)  # (vx, vy, omega_z)
-    velocity_tracking_sigma: float = 0.25
+    target_velocity: tuple[float, float, float] = (0.5, 0.0, 0.0)
+    velocity_tracking_sigma: float = 0.5
 
 
 class LocomotionReward:
@@ -67,6 +72,7 @@ class LocomotionReward:
         body_contacts: bool,
         commands: np.ndarray | None = None,
         terminated: bool = False,
+        base_height: float = 0.28,  # NEW: Current base height
     ) -> tuple[float, dict]:
         """
         Compute total reward for current step.
@@ -84,6 +90,7 @@ class LocomotionReward:
             body_contacts: Whether body (non-foot) is in contact
             commands: Optional velocity commands (vx, vy, omega_z)
             terminated: Whether episode terminated due to fall
+            base_height: Current base height above ground
             
         Returns:
             Tuple of (total_reward, info_dict with individual components)
@@ -106,6 +113,10 @@ class LocomotionReward:
         
         # 2. Alive bonus
         rewards['alive'] = cfg.alive_bonus
+        
+        # 3. Base height tracking reward (encourage standing, not crouching)
+        height_error = (base_height - cfg.target_base_height) ** 2
+        rewards['height_tracking'] = cfg.base_height_tracking * np.exp(-height_error / cfg.height_tracking_sigma)
         
         # 3. Torque penalty (energy efficiency)
         torque_cost = np.sum(joint_torques ** 2)

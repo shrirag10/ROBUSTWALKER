@@ -22,11 +22,11 @@ def get_latest_progress(log_path: str) -> tuple[int, int, float]:
         
         # Get target from start of log
         target_match = re.search(r'Timesteps:\s+([\d,]+)', content)
-        target = int(target_match.group(1).replace(',', '')) if target_match else 1000000
+        target = int(target_match.group(1).replace(',', '')) if target_match else 10000000
         
         return current, target, reward
     except:
-        return 0, 1000000, 0.0
+        return 0, 10000000, 0.0
 
 def draw_progress_bar(current: int, target: int, reward: float, width: int = 40):
     """Draw ASCII progress bar."""
@@ -37,7 +37,7 @@ def draw_progress_bar(current: int, target: int, reward: float, width: int = 40)
     print(f"\r[{bar}] {pct*100:5.1f}% | {current:,}/{target:,} | Reward: {reward:+.1f}   ", end='', flush=True)
 
 def main():
-    log_path = sys.argv[1] if len(sys.argv) > 1 else "training_1m.log"
+    log_path = sys.argv[1] if len(sys.argv) > 1 else "training_10m.log"
     
     print(f"📊 Live Training Progress - {log_path}")
     print("=" * 60)
@@ -48,7 +48,7 @@ def main():
             current, target, reward = get_latest_progress(log_path)
             draw_progress_bar(current, target, reward)
             
-            if current >= target:
+            if current >= target and target > 0:
                 print("\n\n✅ Training Complete!")
                 break
             

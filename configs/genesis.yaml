@@ -1,0 +1,130 @@
+# Genesis Configuration for Go1 Locomotion (v10 — trot gait)
+# Start from v8 (best result +41) but change to diagonal trot symmetry
+# and slightly increase smoothness to reduce jitter
+
+# ─── Environment ─────────────────────────────────────────────────────
+env:
+  num_actions: 12
+  episode_length_s: 20.0
+  resampling_time_s: 4.0
+  action_scale: 0.25
+  clip_actions: 100.0
+  simulate_action_latency: true
+
+  # Base initial pose
+  base_init_pos: [0.0, 0.0, 0.42]
+  base_init_quat: [1.0, 0.0, 0.0, 0.0]
+
+  # PD controller gains
+  kp: 50.0
+  kd: 1.0
+
+  # Termination thresholds (degrees)
+  termination_if_roll_greater_than: 20
+  termination_if_pitch_greater_than: 20
+
+  # Joint configuration
+  joint_names:
+    - FR_hip_joint
+    - FR_thigh_joint
+    - FR_calf_joint
+    - FL_hip_joint
+    - FL_thigh_joint
+    - FL_calf_joint
+    - RR_hip_joint
+    - RR_thigh_joint
+    - RR_calf_joint
+    - RL_hip_joint
+    - RL_thigh_joint
+    - RL_calf_joint
+
+  default_joint_angles:
+    FR_hip_joint: 0.0
+    FR_thigh_joint: 0.9
+    FR_calf_joint: -1.8
+    FL_hip_joint: 0.0
+    FL_thigh_joint: 0.9
+    FL_calf_joint: -1.8
+    RR_hip_joint: 0.0
+    RR_thigh_joint: 0.9
+    RR_calf_joint: -1.8
+    RL_hip_joint: 0.0
+    RL_thigh_joint: 0.9
+    RL_calf_joint: -1.8
+
+# ─── Observations ────────────────────────────────────────────────────
+obs:
+  num_obs: 45  # 3+3+3+12+12+12
+  obs_scales:
+    lin_vel: 2.0
+    ang_vel: 0.25
+    dof_pos: 1.0
+    dof_vel: 0.05
+
+# ─── Rewards (v10 = v8 base + diagonal trot + moderate smoothness) ──
+reward:
+  tracking_sigma: 0.25
+  base_height_target: 0.34
+
+  reward_scales:
+    # Primary locomotion rewards (same as v8)
+    tracking_lin_vel: 1.5
+    tracking_ang_vel: 0.8
+    alive: 1.0
+
+    # Gait coordination (CHANGED to diagonal trot pattern)
+    symmetry: -2.0                # Diagonal: FR↔RL, FL↔RR (trot)
+    hip_deviation: -1.0           # Keep hips under body
+
+    # Posture (same as v8)
+    similar_to_default: -0.1
+    base_height: -30.0
+    orientation: -5.0
+    stumble: -5.0
+
+    # Smoothness (modestly increased from v8 to reduce jitter)
+    action_rate: -0.03            # 3x v8 (anti-jitter, was -0.01)
+    dof_acc: -3.5e-7              # 1.4x v8 (was -2.5e-7)
+    torque: -0.0002               # 2x v8 (was -0.0001)
+    ang_vel_xy: -0.05             # Same as v8
+    lin_vel_z: -2.0               # Same as v8
+
+# ─── Velocity Commands ───────────────────────────────────────────────
+command:
+  num_commands: 3
+  lin_vel_x_range: [0.3, 0.8]
+  lin_vel_y_range: [0.0, 0.0]
+  ang_vel_range: [0.0, 0.0]
+
+# ─── Training (rsl-rl PPO) ──────────────────────────────────────────
+training:
+  num_envs: 4096
+  max_iterations: 1500
+  seed: 42
+
+  algorithm:
+    class_name: PPO
+    clip_param: 0.2
+    desired_kl: 0.01
+    entropy_coef: 0.01
+    gamma: 0.99
+    lam: 0.95
+    learning_rate: 0.001
+    max_grad_norm: 1.0
+    num_learning_epochs: 5
+    num_mini_batches: 4
+    schedule: adaptive
+    use_clipped_value_loss: true
+    value_loss_coef: 1.0
+
+  policy:
+    activation: elu
+    actor_hidden_dims: [512, 256, 128]
+    critic_hidden_dims: [512, 256, 128]
+    init_noise_std: 1.0
+    class_name: ActorCritic
+
+  runner:
+    num_steps_per_env: 24
+    save_interval: 100
+    log_interval: 10
