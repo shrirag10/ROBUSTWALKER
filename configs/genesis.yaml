@@ -52,6 +52,27 @@ env:
     RL_thigh_joint: 0.9
     RL_calf_joint: -1.8
 
+  # ─── Domain Randomization ───────────────────────────────────────
+  domain_rand:
+    # PD gain randomization (±20% of nominal kp=50, kd=1.0)
+    randomize_kp: true
+    kp_range: [40.0, 60.0]
+    kd_range: [0.8, 1.2]
+
+    # External push perturbations
+    push_robots: true
+    push_interval_s: [5.0, 10.0]    # seconds between pushes
+    push_force_range: [0.0, 15.0]    # Newtons, lateral
+    push_duration_s: 0.1             # push lasts 0.1s
+
+    # Sensor noise
+    obs_noise: true
+    obs_noise_level: 0.05            # Gaussian std on observations
+
+    # Actuator noise
+    action_noise: true
+    action_noise_scale: 0.02         # ±2% of action
+
 # ─── Observations ────────────────────────────────────────────────────
 obs:
   num_obs: 45  # 3+3+3+12+12+12

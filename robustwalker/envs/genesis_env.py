@@ -11,6 +11,7 @@ Compatible with rsl-rl OnPolicyRunner for PPO training.
 import math
 from pathlib import Path
 
+import numpy as np
 import torch
 import genesis as gs
 
@@ -122,6 +123,20 @@ class Go1GenesisEnv:
 
         # ─── Build scene (n_envs parallel) ───────────────────────────
         self.scene.build(n_envs=num_envs)
+
+        # ─── Set neutral qpos to standing pose (fixes joint limits warning) ─
+        # Genesis defaults to all-zero joint DOFs, but calf joints have range
+        # [-2.818, -0.888] so 0.0 is outside limits. Set the standing pose.
+        standing_qpos = np.zeros(self.robot.n_qs)
+        # Base position and quaternion (first 7 values)
+        standing_qpos[0:3] = self.env_cfg["base_init_pos"]
+        standing_qpos[3:7] = self.env_cfg["base_init_quat"]
+        # Set joint DOFs to standing angles
+        for joint in self.robot.joints[1:]:  # skip freejoint
+            if joint.name in self.env_cfg["default_joint_angles"]:
+                standing_qpos[joint.dof_start] = self.env_cfg["default_joint_angles"][joint.name]
+        self.robot.init_qpos = standing_qpos
+        self.robot.set_qpos(self.robot.init_qpos)
 
         # ─── Map joint names to DOF indices ──────────────────────────
         self.motors_dof_idx = torch.tensor(
@@ -244,6 +259,35 @@ class Go1GenesisEnv:
             self.reward_functions[name] = getattr(self, "_reward_" + name)
             self.episode_sums[name] = torch.zeros((self.num_envs,), dtype=gs.tc_float, device=gs.device)
 
+        # ─── Domain Randomization ────────────────────────────────────
+        self.domain_rand_cfg = self.env_cfg.get("domain_rand", {})
+        self.randomize_kp = self.domain_rand_cfg.get("randomize_kp", False)
+        self.push_robots = self.domain_rand_cfg.get("push_robots", False)
+        self.obs_noise_enabled = self.domain_rand_cfg.get("obs_noise", False)
+        self.action_noise_enabled = self.domain_rand_cfg.get("action_noise", False)
+
+        # PD gain ranges
+        self.kp_range = self.domain_rand_cfg.get("kp_range", [40.0, 60.0])
+        self.kd_range = self.domain_rand_cfg.get("kd_range", [0.8, 1.2])
+
+        # Push force config
+        push_interval = self.domain_rand_cfg.get("push_interval_s", [5.0, 10.0])
+        self.push_interval_range = [
+            int(push_interval[0] / self.dt),
+            int(push_interval[1] / self.dt),
+        ]
+        self.push_force_range = self.domain_rand_cfg.get("push_force_range", [0.0, 15.0])
+        self.push_duration_steps = int(
+            self.domain_rand_cfg.get("push_duration_s", 0.1) / self.dt
+        )
+
+        # Push timer buffer (counts down steps until next push)
+        self.push_timer = torch.zeros((self.num_envs,), dtype=gs.tc_int, device=gs.device)
+
+        # Noise scales
+        self.obs_noise_level = self.domain_rand_cfg.get("obs_noise_level", 0.05)
+        self.action_noise_scale = self.domain_rand_cfg.get("action_noise_scale", 0.02)
+
     # ─── Model path ──────────────────────────────────────────────────
 
     def _get_model_path(self) -> str:
@@ -275,8 +319,15 @@ class Go1GenesisEnv:
         # Clip actions
         self.actions = torch.clip(actions, -self.env_cfg["clip_actions"], self.env_cfg["clip_actions"])
 
+        # Add action noise for domain randomization
+        if self.action_noise_enabled:
+            action_noise = torch.randn_like(self.actions) * self.action_noise_scale
+            noisy_actions = self.actions + action_noise
+        else:
+            noisy_actions = self.actions
+
         # Simulate action latency (1-step delay as on real robot)
-        exec_actions = self.last_actions if self.simulate_action_latency else self.actions
+        exec_actions = self.last_actions if self.simulate_action_latency else noisy_actions
 
         # Convert to joint position targets: action * scale + default_pos
         target_dof_pos = exec_actions * self.env_cfg["action_scale"] + self.default_dof_pos
@@ -286,6 +337,10 @@ class Go1GenesisEnv:
             target_dof_pos[:, self.actions_dof_idx],
             self.motors_dof_idx,
         )
+
+        # ─── Apply push forces (domain randomization) ────────────────
+        if self.push_robots:
+            self._apply_push_forces()
 
         # Step physics
         self.scene.step()
@@ -414,6 +469,9 @@ class Go1GenesisEnv:
             self.feet_air_time.masked_fill_(envs_idx[:, None], 0.0)
             self.last_feet_contact.masked_fill_(envs_idx[:, None], True)
 
+        # ─── Domain Randomization on Reset ────────────────────────────
+        self._domain_rand_on_reset(envs_idx)
+
         # Log episode reward sums
         n_envs = envs_idx.sum() if envs_idx is not None else self.num_envs
         self.extras["episode"] = {}
@@ -428,6 +486,102 @@ class Go1GenesisEnv:
 
         self._resample_commands(envs_idx)
 
+    def _domain_rand_on_reset(self, envs_idx=None):
+        """Apply per-episode domain randomization on reset."""
+        # ── PD gain randomization ─────────────────────────────────────
+        if self.randomize_kp:
+            if envs_idx is None:
+                # All envs reset: single random kp/kd for the batch
+                rand_kp = torch.empty(1, dtype=gs.tc_float, device=gs.device).uniform_(
+                    self.kp_range[0], self.kp_range[1]
+                ).item()
+                rand_kd = torch.empty(1, dtype=gs.tc_float, device=gs.device).uniform_(
+                    self.kd_range[0], self.kd_range[1]
+                ).item()
+                kp_vals = torch.full((self.num_actions,), rand_kp, dtype=gs.tc_float, device=gs.device)
+                kd_vals = torch.full((self.num_actions,), rand_kd, dtype=gs.tc_float, device=gs.device)
+                self.robot.set_dofs_kp(kp_vals, self.motors_dof_idx)
+                self.robot.set_dofs_kv(kd_vals, self.motors_dof_idx)
+            else:
+                # Only a few envs reset: set per-env random gains
+                n_reset = envs_idx.sum().item()
+                if n_reset > 0:
+                    reset_indices = torch.nonzero(envs_idx).squeeze(-1)
+                    for idx in reset_indices:
+                        rand_kp = torch.empty(1, dtype=gs.tc_float, device=gs.device).uniform_(
+                            self.kp_range[0], self.kp_range[1]
+                        ).item()
+                        rand_kd = torch.empty(1, dtype=gs.tc_float, device=gs.device).uniform_(
+                            self.kd_range[0], self.kd_range[1]
+                        ).item()
+                        kp_vals = torch.full((self.num_actions,), rand_kp, dtype=gs.tc_float, device=gs.device)
+                        kd_vals = torch.full((self.num_actions,), rand_kd, dtype=gs.tc_float, device=gs.device)
+                        self.robot.set_dofs_kp(kp_vals, self.motors_dof_idx, envs_idx=[idx.item()])
+                        self.robot.set_dofs_kv(kd_vals, self.motors_dof_idx, envs_idx=[idx.item()])
+
+        # ── Reset push timers for reset envs ──────────────────────────
+        if self.push_robots:
+            if envs_idx is None:
+                self.push_timer.random_(
+                    self.push_interval_range[0], self.push_interval_range[1]
+                )
+            else:
+                new_timers = torch.empty_like(self.push_timer).random_(
+                    self.push_interval_range[0], self.push_interval_range[1]
+                )
+                self.push_timer = torch.where(envs_idx, new_timers, self.push_timer)
+
+    def _apply_push_forces(self):
+        """Apply random velocity impulses to robot base (vectorized).
+
+        Instead of external forces (solver-only API), directly adds velocity
+        kicks to the robot's base. This is the standard approach used in
+        IsaacGym/IsaacLab for push perturbations.
+        """
+        # Count down to next push
+        self.push_timer -= 1
+
+        # Apply impulse only on the first frame of a push event
+        apply_push = (self.push_timer <= 0)
+        if apply_push.any():
+            n_push = apply_push.sum().item()
+
+            # Convert force to velocity impulse: Δv = F * dt / m
+            # Go1 mass ≈ 12 kg, so vel_impulse = force * dt / 12
+            robot_mass = 12.0
+            force_mag = torch.empty(n_push, dtype=gs.tc_float, device=gs.device).uniform_(
+                self.push_force_range[0], self.push_force_range[1]
+            )
+            vel_impulse = force_mag * self.push_duration_steps * self.dt / robot_mass
+
+            # Random direction in XY plane
+            angle = torch.empty(n_push, dtype=gs.tc_float, device=gs.device).uniform_(0, 2 * math.pi)
+            vx = vel_impulse * torch.cos(angle)
+            vy = vel_impulse * torch.sin(angle)
+
+            # Get current world-frame velocity and add impulse
+            cur_vel = self.robot.get_vel()  # (num_envs, 3)
+            new_vel = cur_vel.clone()
+            push_indices = torch.nonzero(apply_push).squeeze(-1)
+            new_vel[push_indices, 0] += vx
+            new_vel[push_indices, 1] += vy
+
+            # Apply velocity change via qpos manipulation:
+            # Set base velocity DOFs (indices 0,1,2 of qvel = vx,vy,vz)
+            # We use set_dofs_velocity on the base freejoint (first 6 DOFs)
+            base_vel_dof_idx = torch.tensor([0, 1], dtype=gs.tc_int, device=gs.device)
+            vel_update = torch.stack([vx, vy], dim=1)  # (n_push, 2)
+            cur_base_vel = self.robot.get_dofs_velocity(base_vel_dof_idx)
+            new_base_vel = cur_base_vel.clone()
+            new_base_vel[push_indices] += vel_update
+            self.robot.set_dofs_velocity(new_base_vel, base_vel_dof_idx)
+
+            # Reset timer for next push
+            new_timers = torch.empty(n_push, dtype=gs.tc_int, device=gs.device).random_(
+                self.push_interval_range[0], self.push_interval_range[1]
+            )
+            self.push_timer[apply_push] = new_timers
+
     def _update_observation(self):
         """Build observation buffer from current state."""
         self.obs_buf = torch.concatenate(
@@ -441,6 +595,9 @@ class Go1GenesisEnv:
             ),
             dim=-1,
         )
+        # Add observation noise for domain randomization
+        if self.obs_noise_enabled:
+            self.obs_buf += torch.randn_like(self.obs_buf) * self.obs_noise_level
 
     # ─── Reward functions (each returns tensor of shape (num_envs,)) ─
 
