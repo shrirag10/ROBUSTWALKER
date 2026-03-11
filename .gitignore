@@ -32,3 +32,8 @@ training*.log
 # Misc
 .DS_Store
 *.cache/
+videos/
+test.png
+logs/
+__pycache__/
+*.pyc
