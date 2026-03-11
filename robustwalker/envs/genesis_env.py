@@ -124,19 +124,16 @@ class Go1GenesisEnv:
         # ─── Build scene (n_envs parallel) ───────────────────────────
         self.scene.build(n_envs=num_envs)
 
-        # ─── Set neutral qpos to standing pose (fixes joint limits warning) ─
+        # ─── Set standing pose (cosmetic: qpos0 warning during build is harmless)
         # Genesis defaults to all-zero joint DOFs, but calf joints have range
-        # [-2.818, -0.888] so 0.0 is outside limits. Set the standing pose.
+        # [-2.818, -0.888]. Set the proper standing pose after build.
         standing_qpos = np.zeros(self.robot.n_qs)
-        # Base position and quaternion (first 7 values)
         standing_qpos[0:3] = self.env_cfg["base_init_pos"]
         standing_qpos[3:7] = self.env_cfg["base_init_quat"]
-        # Set joint DOFs to standing angles
         for joint in self.robot.joints[1:]:  # skip freejoint
             if joint.name in self.env_cfg["default_joint_angles"]:
                 standing_qpos[joint.dof_start] = self.env_cfg["default_joint_angles"][joint.name]
-        self.robot.init_qpos = standing_qpos
-        self.robot.set_qpos(self.robot.init_qpos)
+        self.robot.set_qpos(standing_qpos)
 
         # ─── Map joint names to DOF indices ──────────────────────────
         self.motors_dof_idx = torch.tensor(
